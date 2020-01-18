@@ -189,7 +189,7 @@ namespace
 	{
 	public:
 		void Lock(){}
-		void Free(){}
+		void Unlock(){}
 	private:
 	};
 	
@@ -235,6 +235,9 @@ namespace
 	};
 }
 
+
+#include <memory>
+
 ////
 // The simpler - the better
 namespace simple
@@ -249,218 +252,110 @@ namespace simple
 		
 		virtual ~Creator() = default;
 	};
-	
-	template <class UserClass, template<class> class Resource, template<class> class AcquireReleaseStrategie, class MutexStrategie>
-	class Pool
+
+    /////
+    /// Сырое выделение ресурсов: если недостаточно памяти, то вызывается exception
+    /// Нет проверки на то, что возвращаемый ресурс действительно из данного пула
+    /// \tparam UserClass
+    /// \tparam MemoryContainer     требования: наличие конструктора с сигнатурой (size_t, UserType*);
+    ///                             наличие метода: void resize()
+    ///                             наличие метода: size_t size()
+    ///                             наличие метода: Resource& operator[](size_t)
+    template<class UserClass>
+    class AcquireReleaseRaw
+    {
+    public:
+        class Resource;
+        typedef Resource resource_t;
+
+        class Resource
+        {
+        public:
+            UserClass& GetObjectByRef(){
+                return *m_ptrToData;
+            }
+        private:
+            UserClass* m_ptrToData = nullptr;
+            friend class AcquireReleaseRaw;
+        };
+
+        AcquireReleaseRaw(size_t reservedSize,
+                          std::shared_ptr<Creator<UserClass>> creator): m_pool(reservedSize, Resource()),
+                                                                        m_creator(creator)
+        {
+            for(auto &resource: m_pool){
+                resource.m_ptrToData = creator->Create();
+            }
+        }
+
+        Resource Acquire()
+        {
+            if(m_pool.size() > 0){
+                auto resource = m_pool.back();
+                size_t newSize = m_pool.size() - 1;
+                m_pool.resize(newSize);
+                return resource;
+            }
+            else{
+                throw "No memory available";
+            }
+        }
+
+        void Release(Resource resource)
+        {
+            size_t newSize = m_pool.size() + 1;
+            m_pool.resize(newSize);
+            m_pool[newSize-1] = resource;
+        }
+    private:
+        std::vector<Resource> m_pool;
+        std::shared_ptr<Creator<UserClass>> m_creator;
+    };
+
+	template <class UserClass, template<class> class AcquireReleaseStrategy = AcquireReleaseRaw, class MutexStrategy = NoMutexStrategy>
+	class ObjectPoolHolder
 	{
 	public:
-		Pool(size_t size, Creator<UserClass> creator): m_availableObjs(size)
+        typedef typename AcquireReleaseStrategy<UserClass>::resource_t resource_t;
+
+		ObjectPoolHolder(size_t size, Creator<UserClass> creator = Creator<UserClass>()):
+		    m_availableObjs(size, std::make_shared<Creator<UserClass>>(creator))
 		{
-			for(auto &objPtr: m_availableObjs){
-				objPtr = creator.Create();
-			}
 		}
 		
-		UserClass* Acquire()
+		auto Acquire()
 		{
-			MutexStrategie().lock();
-			UserClass* obj = m_availableObjs.back();
-			m_availableObjs.pop_back();
-			MutexStrategie().unlock();
+			MutexStrategy().Lock();
+			auto obj = m_availableObjs.Acquire();
+			MutexStrategy().Unlock();
 			return obj;
 		}
 		
-		void Release(UserClass* obj)
+		void Release(resource_t obj)
 		{
-			MutexStrategie().lock();
-			m_availableObjs.push_back(obj);
-			MutexStrategie().unlock();
+			MutexStrategy().Lock();
+			m_availableObjs.Release(obj);
+			MutexStrategy().Unlock();
 		}
-	
-		Creator<UserClass>& GetCreator(){
-			return m_creator;
-		}
-		
-		const Creator<UserClass>& GetCreator() const {
-			return m_creator;
-		}
-		
-		void ChangeCreator(Creator<UserClass> creator) {
-			m_creator = std::move(creator);
-		}
+
+		auto AcquireByUserId();
+
 	private:
-		std::list<UserClass*> m_availableObjs;
-		Creator<UserClass> m_creator;
+        AcquireReleaseStrategy<UserClass> m_availableObjs;
 	};
+
+
 }
 
 int main()
 {
+    using mytype = std::vector<int>;
+    simple::ObjectPoolHolder<mytype> pool(10);
+    auto res1 = pool.Acquire();
+    auto res2 = pool.Acquire();
+    auto &data1 = res1.GetObjectByRef();
+    data1.resize(100);
+    pool.Release(res2);
 	std::cout << "Hello, World!" << std::endl;
 	return 0;
 }
-
-//
-//ObjectPool<UserClass, AccessPolicy = RandomAcces> pool(size, creator);
-//ObjectPool<UserClass, AccessPolicy = Map<UserId>> pool(size, creator);
-//
-//UserClass &pool.GetById("asdasd"); // only if AccesPolicy == Map
-//UserClass &obj = pool.GetFreeRef();
-//UserClass *obj2 = pool.GetFreePtr();
-//
-//pool.GetListOfFree(); // returns cosnt list of free objs. !!! Alarm! Multithreading !!!
-//pool.GetListOfCaptive(); // returns cosnt list of captive objs. !!! Alarm! Multithreading !!!
-//pool.Release();
-//
-//obj в работе.
-//
-//
-//using MyClass = std::vector<int>;
-//class MyCreator: public SuperDuperArchitecture::Creator<MyClass>
-//{
-//public:
-//	MyCreator(size_t vectorSize, int vals):
-//			m_vectorSize(vectorSize),
-//			m_vals(vals)
-//	{}
-//	MyClass* Create() const override{
-//		return (new MyClass(m_vectorSize, m_vals));
-//	}
-//private:
-//	size_t m_vectorSize;
-//	int m_vals;
-//};
-//
-//int main()
-//{
-//	MyCreator myCreator(15, -239);
-//	SuperDuperArchitecture::PoolObjectBind<std::vector<int>> objectBind(1000239, myCreator);
-//	auto obj = objectBind.GetDataByRef();
-//	int stop = 0;
-//	std::cout << "Hello, World!" << std::endl;
-//	return 0;
-//}
-//
-//
-//
-//
-//namespace
-//{
-//
-//	template<class UserClass, template<class> class MemoryPolicy = MemoryNew>
-//	class PoolObjectBind_elegant_but_bad
-//	{
-//	public:
-//		template<class... UserClassConstructorParams>
-//		PoolObjectBind_elegant_but_bad(size_t id, UserClassConstructorParams &&... params):m_id(id),
-//		                                                                                   m_free(true)
-//		{
-//			m_data = MemoryPolicy<UserClass>::New(params...);
-//		};
-//
-//		const UserClass *GetDataPtr() const
-//		{
-//			return m_data;
-//		};
-//
-//		UserClass *GetDataPtr()
-//		{
-//			return m_data;
-//		};
-//
-//		const UserClass &GetDataRef() const
-//		{
-//			return *m_data;
-//		};
-//
-//		UserClass &GetDataRef()
-//		{
-//			return *m_data;
-//		};
-//
-//		size_t GetId() const
-//		{
-//			return m_id;
-//		};
-//
-//		bool IsFree() const
-//		{
-//			return m_free;
-//		};
-//
-//		void SetFree()
-//		{
-//			m_free = true;
-//		}
-//
-//		void SetCaptive()
-//		{
-//			m_free = false;
-//		}
-//
-//	private:
-//		size_t m_id;
-//		bool m_free;
-//		UserClass *m_data = nullptr;
-//	};
-//
-//}
-//
-//
-//namespace SuperArchitecture
-//{
-//
-//	/////
-//	/// То, что отображается на мониторе и идет в видеокарту
-//	class GraphicObject
-//	{};
-//
-//	//////
-//	/// Все, что может взаимодействовать с логикой процесса.
-//	class GameObject
-//	{
-//	public:
-//		GameObject(uint32_t objectId) : m_id(objectId){
-//		}
-//
-//		uint32_t GetId() const {
-//			return m_id;
-//		}
-//		void SetId(uint32_t id) {
-//			m_id = id;
-//		}
-//		virtual ~GameObject() = default;
-//	private:
-//		uint32_t m_id;
-//	};
-//
-//	template <template <class> class Container, template <class> class Memory>
-//	class GameObjectPool
-//	{
-//	public:
-//		typedef Memory<GameObject> Memory_t;
-//		typedef Container<Memory_t> Containger_t;
-//		GameObjectPool(){}
-//		void AddObject();
-//	private:
-//		Containger_t m_objectPool;
-//	};
-//
-//	class Hero : public GameObject
-//	{
-//	public:
-//		Hero(uint32_t objectId): GameObject(objectId){}
-//		Hero(uint32_t objectId, const std::string &name): GameObject(objectId), m_name(name){}
-//
-//		std::string GetName() const {
-//			return m_name;
-//		}
-//		void SetName(const std::string &name){
-//			m_name = name;
-//		};
-//	private:
-//		std::string m_name;
-//		std::shared_ptr<GraphicObject> m_visualisation;
-//
-//	};
-//}
