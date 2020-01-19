@@ -1,5 +1,5 @@
 # Simple
-credo of the repository: "The simpler the better"
+"The simpler the better"
 
 
 В этом репозитории я постараюсь собрать разные свои велосипеды для быстрого "proof of concept" (для задач преимещуственно из математического программирования). Увы, часто python недостаточно производителен для такого.
